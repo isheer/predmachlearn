@@ -1,0 +1,229 @@
+---
+title: "Practical Machine Learning Course Project"
+author: "I. Sheer"
+date: "April 16, 2015"
+output: html_document
+---
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+library(caret)
+# set random number generator seed
+set.seed(20150415)
+```
+
+## Synopsis
+This analysis is performed as a requirement of the Coursera "Practical Machine
+Learning" course offered April 2015 by Jeff Leek, PhD.
+
+We analyze data from wearable sensors collected by [Velloso, et. al.][velloso2013]
+while subjects participated in weight lifting exercises.
+The goal of the analysis is to see if we can predict if the subjects performed
+the exercises correctly.
+
+Using a Random Forest model to fit the data we are able to achieve very high
+accuracy with respect to correctly identifying the Class of an observation.
+
+```{r, echo=FALSE, cache=TRUE}
+# create tidy dataset
+url <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+pmlFile <- "pml-training.csv"
+download.file(url, pmlFile, method="curl")
+pml <- read.table(pmlFile, sep=",", header=TRUE, na.strings=c("NA", "#DIV/0!"))
+# remove variables unlikely to contribute to model
+to.rm <- which(names(pml) %in%
+                c("X", "raw_timestamp_part_1", "raw_timestamp_part_2",
+                  "cvtd_timestamp", "num_window"))
+# remove near zero var variables
+nzv <- nearZeroVar(pml)
+pml.tidy <- pml[,-append(to.rm, nzv)]
+# replace NA's by mean
+fixup.num <- function(x) {x[is.na(x)] <- mean(x, na.rm=TRUE); return(x)}
+# replace NA's by median
+fixup.int <- function(x) {x[is.na(x)] <- median(x, na.rm=TRUE); return(x)}
+# replace NA's by appropriate statistic
+fixup <- function(x) {
+    if (!any(is.na(x))) {return(x)}
+    if (class(x) == "numeric") {return(fixup.num(x))}
+    if (class(x) == "integer") {return(fixup.int(x))}
+    return(x)
+}
+for (i in 1:dim(pml.tidy)[2]) {pml.tidy[, i] <- fixup(pml.tidy[,i])}
+
+```
+
+##Data Set
+Data was collected from `r length(levels(pml$user_name))` subjects while
+performing 10 repetitions of the Unilateral Dumbbell Biceps Curl.
+The subjects performed the exercise in five different fashions as shown in the
+table below.
+
+Class | Description
+----- | -----------
+A     | exactly according to the specification
+B     | throwing elbows to the front
+C     | lifting the dumbbell only halfway
+D     | lowering the dumbbell only halfway
+E     | throwing hips to the front
+
+Table 1: Class descriptions.
+
+Only class A corresponds to correctly executing the exercise, while the other
+classes represent common mistakes.
+
+Data was collected from four 9 degrees of freedom Razor inertial measurement
+units which provide three-axes acceleration, gyroscope and magnetometer data
+at a joint sampling rate of 45 Hz.
+The sensors were mounted in the users' glove, armband, lumbar belt and dumbbell.
+
+The data set for this analysis was obtained from the Coursera website at the
+following [url](`r url`).
+The data set consists of `r dim(pml)[1]` observations on `r dim(pml)[2]`
+variables.
+
+We scrubbed the data set by removing near zero variance variables and other
+variables unlikely to contribute to the analysis.
+This process reduced the number of variables in the data set to 
+`r dim(pml.tidy)[2]`.
+In addition, we replaced missing values, represented as NA's and #DIV/0!'s in
+the data set, by medians or means depending on the variable type (medians for 
+integer variables and means for numeric variables).
+
+```{r, echo=FALSE}
+# partition tidy data set
+inTrain <- createDataPartition(pml.tidy$classe, p=0.6, list=FALSE)
+training <- pml.tidy[inTrain,]
+testvalid <-pml.tidy[-inTrain,]
+inTest <- createDataPartition(testvalid$classe, p=0.5, list=FALSE)
+testing <- testvalid[inTest,]
+validation <- testvalid[-inTest,]
+```
+
+We partition the scrubbed data into three sets: training, testing and validation.
+These consist of, respectively, 60%, 20% and 20% of the observations.
+
+##Model Selection
+We tried four different approaches to fitting the training data set.
+These include Linear Discriminant Analysis (lda),
+Classification and Regression Trees (rpart), Random Forest (rf) and
+Stochastic Gradient Boosting (gbm).
+
+```{r, echo=FALSE, cache=FALSE, warning=FALSE, message=FALSE}
+# fit lda model
+ldaFit <- train(classe ~ ., method="lda", data=training)
+ldaCM <- confusionMatrix(predict(ldaFit, testing), testing$classe)
+```
+
+```{r, echo=FALSE, cache=TRUE, message=FALSE}
+# fit rpart model
+rpartFit <- train(classe ~ ., method="rpart", data=training)
+rpartCM <- confusionMatrix(predict(rpartFit, testing), testing$classe)
+```
+
+```{r, echo=FALSE, cache=TRUE, message=FALSE}
+# fit rf model
+rfFit <- train(classe ~ ., method="rf", prox=TRUE, data=training)
+rfCM <- confusionMatrix(predict(rfFit, testing), testing$classe)
+```
+
+```{r, echo=FALSE, cache=TRUE, message=FALSE, warning=FALSE}
+# fit gbm model
+gbmFit <- train(classe ~ ., method="gbm", data=training, verbose=FALSE)
+gbmCM <- confusionMatrix(predict(gbmFit, testing), testing$classe)
+```
+
+The accuracy of the fitted models was measured against the testing data set.
+We observed the following results.
+
+Model | Accuracy (%)
+----- | ------------
+lda   | `r round(100 * ldaCM$overall[1], 2)`
+rpart | `r round(100 * rpartCM$overall[1], 2)`
+rf    | `r round(100 * rfCM$overall[1], 2)`
+gbm   | `r round(100 * gbmCM$overall[1], 2)`
+
+Table 2:  Model accuracy with respect to the testing set.
+
+The results in Table 2 show that we get excellent results from
+both the Random Forest and the Stochastic Gradient Boosting models.
+It was somewhat unexpected that the Classification and Regression Trees model
+only yielded lackluster performance.
+Results from the Linear Discriminant Analysis were good but not as 
+stellar as some of the other approaches.
+As the Random Forest model has the highest accuracy we choose this model as our
+baseline.
+
+##Model Validation
+To estimate the true accuracy of the Random Forest model we now evaluate it
+using our validation set.
+In Figure 1 we show the confusion matrix obtained with this model.
+
+```{r, echo=FALSE, message=FALSE}
+bestFit <- rfFit
+bestCM <- confusionMatrix(predict(bestFit, validation), validation$classe)
+accuracy <- round(100 * bestCM$overall[1], 2)
+```
+
+```{r, echo=FALSE}
+print(bestCM$table)
+```
+Figure 1: Confusion matrix for Random Forest model using validation set.
+
+We estimate that the Random Forest model has an accuracy of
+`r accuracy`%.
+This can be compared with the results obtained by the original authors of
+the study, who obtained an overall performance of 98.03%.
+In the original study the authors also used a Random Forest approach which
+perhaps explains the similar level of accuracy obtained.
+
+Sensitivity, Specificity and Accuracy was computed for for each class
+using data from the validation set.
+This is shown in Figure 2.
+
+```{r, echo=FALSE}
+rfCM$byClass[, c(1, 2, 8)]
+```
+Figure 2: Sensitivity, Specificity and Accuracy by class for the Random Forest
+model.
+
+##Conclusions
+We obtain an accuracy of `r accuracy`% with respect to correctly classifying
+observations using a Random Forest model.
+While, high accuracy is obtained a significant draw back of this approach is 
+the compute intensive requirements of training the Random Forest model.
+For example, it took around 5 hour to train the model on an iMac with a 2.8 GHz
+Intel Core i5 processor.
+
+##References
+
+[velloso2013]: Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. 
+**Qualitative Activity Recognition of Weight Lifting Exercises**. 
+Proceedings of 4th International Conference in Cooperation with SIGCHI 
+(Augmented Human '13). Stuttgart, Germany: ACM SIGCHI, 2013.
+
+```{r, echo=FALSE, message=FALSE}
+# predict class for observations in test set
+testURL <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+testFile <- "pml-testing.csv"
+download.file(testURL, testFile, method="curl")
+test.raw <- read.table(testFile, sep=",", header=TRUE, na.strings=c("NA", "#DIV/0!"))
+test.tidy <- test.raw[,-append(to.rm, nzv)]
+for (i in 1:dim(test.tidy)[2]) {
+    if (any(is.na(test.tidy[, i]))) {
+        if (class(pml.tidy[, i]) == "integer") {
+            test.tidy[, i] <- median(pml.tidy[, i], na.rm=TRUE)
+        }
+        else if (class(pml.tidy[, i]) == "numeric") {
+            test.tidy[, i] <- mean(pml.tidy[, i], na.rm=TRUE)
+        }
+    }
+}
+testPred <- predict(bestFit, test.tidy)
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+pml_write_files(testPred)
+```
